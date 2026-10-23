@@ -82,10 +82,16 @@ $('search').onsubmit = async e => {
   $('results').innerHTML = '';
   $('meta').textContent = 'Recherche…';
   try {
-    const res = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
-    if (!res.ok) throw new Error(res.status);
-    const list = (await res.json()).filter(s => s.syncedLyrics || s.plainLyrics);
-    $('meta').innerHTML = list.length ? `${list.length} résultat(s) · ${geniusLink(q)}` : `Rien trouvé · ${geniusLink(q)}`;
+    let list, source = '';
+    try {
+      list = (await getJSON('https://lrclib.net/api/search?q=' + encodeURIComponent(q))).filter(s => s.syncedLyrics || s.plainLyrics);
+    } catch {
+      // LRCLIB tombe en panne par moments : secours lyrics.ovh (texte seul, pas de synchro)
+      list = (await getJSON('https://api.lyrics.ovh/suggest/' + encodeURIComponent(q))).data
+        .map(d => ({ artistName: d.artist.name, trackName: d.title, duration: d.duration, ovh: true }));
+      source = ' (source de secours, texte seul)';
+    }
+    $('meta').innerHTML = list.length ? `${list.length} résultat(s)${source} · ${geniusLink(q)}` : `Rien trouvé · ${geniusLink(q)}`;
     for (const s of list.slice(0, 20)) {
       const b = document.createElement('button');
       b.innerHTML = `<span></span><br><small>${s.syncedLyrics ? '⏱ synchronisé' : 'texte seul'} · ${fmt(s.duration || 0)}</small>`;
@@ -98,9 +104,22 @@ $('search').onsubmit = async e => {
   }
 };
 
-function open(s) {
+async function getJSON(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(res.status);
+  return res.json();
+}
+
+async function open(s) {
   song = s;
   offset = 0;
+  if (s.ovh && !s.plainLyrics) {
+    $('meta').textContent = 'Chargement…';
+    try {
+      s.plainLyrics = (await getJSON(`https://api.lyrics.ovh/v1/${encodeURIComponent(s.artistName)}/${encodeURIComponent(s.trackName)}`)).lyrics;
+    } catch {}
+    if (!s.plainLyrics) return $('meta').innerHTML = `Paroles introuvables · ${geniusLink(s.artistName + ' ' + s.trackName)}`;
+  }
   if (s.syncedLyrics) {
     lines = parseLRC(s.syncedLyrics);
     show('focus');
