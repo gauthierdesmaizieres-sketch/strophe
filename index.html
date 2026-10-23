@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>Paroles</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: #101827; color: #fff; font-family: system-ui, sans-serif;
+         display: flex; flex-direction: column; max-width: 600px; margin: 0 auto; }
+  form { padding: 16px; display: flex; gap: 8px; }
+  input { flex: 1; padding: 12px 14px; border-radius: 12px; border: none; font-size: 16px;
+          background: #1d2738; color: #fff; }
+  button { border: none; border-radius: 12px; padding: 12px 16px; font-size: 15px; font-weight: 600;
+           background: #1d2738; color: #fff; cursor: pointer; }
+  .accent { background: #c6ff3d; color: #101827; }
+  #meta { padding: 0 16px 8px; color: #7d8aa3; text-align: center; font-size: 14px; min-height: 1.4em; }
+  #meta a { color: #c6ff3d; }
+  main { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  #results button { display: block; width: 100%; text-align: left; margin-bottom: 8px; font-weight: 500; }
+  #results small { color: #7d8aa3; }
+  #focus { height: 100%; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+  #focus p { margin: 0; color: #4b5873; font-size: 20px; line-height: 1.35; cursor: pointer; }
+  #focus p.now { color: #c6ff3d; font-size: 32px; font-weight: 800; margin: 18px 0; }
+  #plain { white-space: pre-wrap; font-size: 20px; line-height: 1.6; }
+  #bar { display: flex; justify-content: space-between; padding: 14px 16px 20px; }
+  #bar .accent { padding: 12px 28px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<form id="search">
+  <input id="q" type="search" placeholder="Artiste – Titre" autocomplete="off" aria-label="Rechercher une chanson">
+  <button class="accent">🔍</button>
+</form>
+<div id="meta"></div>
+<main>
+  <div id="results"></div>
+  <div id="focus" hidden><p id="prev"></p><p id="now" class="now"></p><p id="next"></p></div>
+  <div id="plain" hidden></div>
+</main>
+<div id="bar" hidden>
+  <button id="minus">−0,5s</button>
+  <button id="play" class="accent">▶ Start</button>
+  <button id="plus">+0,5s</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let lines = [], offset = 0, startedAt = null, song = null;
+
+// "[01:02.50][01:40.00] texte" → [{t: 62.5, text}, {t: 100, text}], triées par temps
+function parseLRC(lrc) {
+  const out = [];
+  for (const raw of lrc.split('\n')) {
+    const stamps = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    const text = raw.replace(/\[[^\]]*\]/g, '').trim() || '♪';
+    for (const s of stamps) out.push({ t: +s[1] * 60 + +s[2], text });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+{ const p = parseLRC('[00:05.00]b\n[00:01.50][00:09.00]a\n[ar:x]\n[00:07.00]');
+  console.assert(p.length === 4 && p[0].t === 1.5 && p[0].text === 'a' && p[3].t === 9 && p[2].text === '♪', 'parseLRC'); }
+
+const now = () => offset + (startedAt === null ? 0 : (performance.now() - startedAt) / 1000);
+const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const geniusLink = q => `<a href="https://genius.com/search?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">Chercher sur Genius</a>`;
+
+function show(view) {
+  for (const id of ['results', 'focus', 'plain']) $(id).hidden = id !== view;
+  $('bar').hidden = view !== 'focus';
+}
+
+$('search').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('q').value.trim();
+  if (!q) return;
+  stop();
+  show('results');
+  $('results').innerHTML = '';
+  $('meta').textContent = 'Recherche…';
+  try {
+    const res = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
+    if (!res.ok) throw new Error(res.status);
+    const list = (await res.json()).filter(s => s.syncedLyrics || s.plainLyrics);
+    $('meta').innerHTML = list.length ? `${list.length} résultat(s) · ${geniusLink(q)}` : `Rien trouvé · ${geniusLink(q)}`;
+    for (const s of list.slice(0, 20)) {
+      const b = document.createElement('button');
+      b.innerHTML = `<span></span><br><small>${s.syncedLyrics ? '⏱ synchronisé' : 'texte seul'} · ${fmt(s.duration || 0)}</small>`;
+      b.firstChild.textContent = `${s.artistName} – ${s.trackName}`; // textContent: pas d'injection HTML
+      b.onclick = () => open(s);
+      $('results').append(b);
+    }
+  } catch {
+    $('meta').innerHTML = `Recherche impossible (réseau ?) · ${geniusLink(q)}`;
+  }
+};
+
+function open(s) {
+  song = s;
+  offset = 0;
+  if (s.syncedLyrics) {
+    lines = parseLRC(s.syncedLyrics);
+    show('focus');
+    render();
+  } else {
+    $('plain').textContent = s.plainLyrics;
+    show('plain');
+    $('meta').textContent = `${s.artistName} – ${s.trackName} · texte seul`;
+  }
+}
+
+function render() {
+  const t = now();
+  let i = -1;
+  while (i + 1 < lines.length && lines[i + 1].t <= t) i++;
+  $('prev').textContent = lines[i - 1]?.text ?? '';
+  $('now').textContent = i < 0 ? '…' : lines[i].text;
+  $('next').textContent = lines[i + 1]?.text ?? '';
+  $('prev').dataset.t = lines[i - 1]?.t ?? '';
+  $('now').dataset.t = lines[i]?.t ?? '';
+  $('next').dataset.t = lines[i + 1]?.t ?? '';
+  $('meta').textContent = `${song.artistName} – ${song.trackName} · ${fmt(Math.max(0, t))}`;
+}
+
+function tick() {
+  render();
+  if (startedAt !== null) requestAnimationFrame(tick);
+}
+
+function stop() {
+  if (startedAt !== null) offset = now();
+  startedAt = null;
+  $('play').textContent = '▶ Start';
+}
+
+$('play').onclick = () => {
+  if (startedAt !== null) return stop();
+  startedAt = performance.now();
+  $('play').textContent = '⏸ Pause';
+  tick();
+};
+$('minus').onclick = () => { offset -= 0.5; render(); };
+$('plus').onclick = () => { offset += 0.5; render(); };
+// toucher une ligne = sauter à cette ligne (pour se recaler vite)
+for (const id of ['prev', 'now', 'next']) $(id).onclick = e => {
+  if (e.target.dataset.t === '') return;
+  offset += +e.target.dataset.t - now();
+  render();
+};
+</script>
+</body>
+</html>
