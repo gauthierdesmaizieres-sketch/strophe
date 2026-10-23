@@ -94,7 +94,7 @@ $('search').onsubmit = async e => {
       $('results').append(b);
     }
   } catch {
-    $('meta').innerHTML = `Recherche impossible (réseau ?) · ${geniusLink(q)}`;
+    $('meta').innerHTML = `Recherche impossible (pas de réseau, ou LRCLIB en panne : réessaie plus tard) · ${geniusLink(q)}`;
   }
 };
 
